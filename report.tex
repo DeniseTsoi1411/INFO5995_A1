@@ -1,0 +1,77 @@
+﻿\documentclass[letterpaper,twocolumn,10pt]{article}
+\usepackage{usenix-2020-09}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{array}
+
+\title{AI-Assisted Cryptographic Vulnerability Discovery in an Android APK}
+
+\author{
+{\rm Your Name(s)}\\
+The University of Sydney
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We analyzed a provided Android APK by decompiling it to recover source code and application metadata. The goal was to model the system, identify security-sensitive ``random'' values, and assess whether they are generated safely. We found that a session token is generated with \texttt{java.util.Random}, which is predictable and unsuitable for authentication. We describe a realistic attacker model, a concrete exploitation path, and a mitigation using a cryptographically secure RNG.
+\end{abstract}
+
+\section{Introduction}
+APK analysis is necessary because Android applications are distributed as compiled packages; auditing requires decompilation to inspect logic, data flows, and security-relevant implementation details. We decompiled the APK to identify components and evaluate how authentication and session state are handled.
+
+\section{System and Threat Model}
+\textbf{System.} Package \texttt{com.example.\allowbreak mastg\_test0016} launches \\texttt{MainActivity}. The app supports registration (stores \\texttt{credentials.txt} in app-private storage), login, and a profile screen. After login, a session token is stored in \\texttt{SharedPreferences} (\\texttt{SessionPrefs}). Figure~\\ref{fig:login} shows the token generation logic.
+
+\textbf{Assets.} User credentials (stored locally), the session token, and access to the profile screen.
+
+\textbf{Attacker.} We assume a realistic local adversary such as a malicious app on a rooted device, or a user with debugging access who can read/modify app-private storage. The attacker can observe the time window when a user logs in and can read or overwrite the session token in \texttt{SharedPreferences}.
+
+\section{Method and Tooling}
+We used AI assistance to select a decompilation workflow and then decompiled the APK with JADX to recover the manifest and Java sources. We then searched for ``random'' values, ``tokens'', and session-related fields. Table~\ref{tab:random} lists all randomness-related locations and their roles.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.46\columnwidth}>{\raggedright\arraybackslash}p{0.44\columnwidth}}
+\toprule
+\textbf{Location} & \textbf{Role of Randomness} \\
+\midrule
+\texttt{MainActivity.}\allowbreak\texttt{randomNumberGenerator()} & UI/debug random (logged); not security-relevant. \\
+\texttt{Login.}\allowbreak\texttt{generateSessionToken()} & Session token in \texttt{SharedPreferences}. \\
+\bottomrule
+\end{tabular}
+\caption{Randomness locations in the app and their security roles.}
+\label{tab:random}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figs/login_snippet.png}
+\caption{Decompiled login code excerpt showing session token generation with \texttt{java.util.Random}.}
+\label{fig:login}
+\end{figure}
+
+\section{Vulnerability: Predictable Session Tokens}
+\textbf{Root cause.} The session token is created in \texttt{Login.generateSessionToken()} using \texttt{java.util.Random}. This PRNG is not cryptographically secure and is seeded from time-based values, making outputs predictable. A 16-character token is constructed by repeatedly calling \texttt{random.nextInt(62)}.
+
+\textbf{Why this is risky.} Session tokens act as authentication artifacts. If token values are predictable, an attacker can guess or reproduce a victim's token within a feasible search window, then impersonate the user or bypass access checks that rely on the token.
+
+\textbf{Attack scenario.} (Static analysis)
+\begin{enumerate}
+\item The attacker approximates the login time (e.g., local attacker or side-channel observation).
+\item The attacker brute-forces the small seed window for \\texttt{Random}, regenerating candidate tokens until a match.
+\item The attacker writes the predicted token into \texttt{SharedPreferences} or uses it in any flow that trusts the token, gaining access to the profile session.
+\end{enumerate}
+
+\section{Mitigation}
+Replace \\texttt{java.util.Random} with \\texttt{java.security.SecureRandom} and generate tokens with sufficient entropy. For example, draw 128 bits and Base64-encode, or use a standard token library. This prevents feasible prediction because \\texttt{SecureRandom} is designed for security-sensitive randomness.
+
+\section{Conclusion}
+APK decompilation revealed a predictable session token implementation. While the app is small, the flaw maps directly to real-world session management risks. A minimal change to \texttt{SecureRandom} fixes the weakness and is consistent with secure session token generation practices.
+
+\end{document}
